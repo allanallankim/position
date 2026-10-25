@@ -1,0 +1,15 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {measure,average,assess,PersistenceGate} from '../src/pose.js';
+const pose=()=>{const p=Array.from({length:33},()=>({x:.5,y:.5,z:0,visibility:1}));p[7]={x:.42,y:.2,z:-.05,visibility:1};p[8]={x:.58,y:.2,z:-.05,visibility:1};p[11]={x:.35,y:.4,z:0,visibility:1};p[12]={x:.65,y:.4,z:0,visibility:1};p[23]={x:.4,y:.8,z:0,visibility:1};p[24]={x:.6,y:.8,z:0,visibility:1};return p;};
+test('same baseline gives 100; symmetric pose has no tilt',()=>{const m=measure(pose(),4/3);assert.equal(m.shoulder,0);assert.equal(m.torso,0);assert.equal(assess(m,m).score,100);});
+test('missing pose or shoulders prevents scoring',()=>{assert.equal(measure(null),null);const p=pose();p[11].visibility=.2;assert.equal(measure(p),null);});
+test('phone upper body view still scores without hips or baseline',()=>{const p=pose();p[23].visibility=.2;p[24].y=1.2;const m=measure(p);assert.equal(m.torso,null);const r=assess(m);assert.equal(r.score,100);assert.deepEqual(r.metrics.map(v=>v.key),['shoulder','head']);p[11].y+=.12;assert.ok(assess(measure(p)).score<100);});
+test('invisible ears exclude neck and head while keeping shoulders',()=>{const p=pose();p[7].visibility=.1;const m=measure(p);assert.equal(m.neck,null);assert.equal(m.head,null);assert.equal(assess(m).metrics.length,2);});
+test('partial calibration excludes missing metrics without treating them as zero',()=>{const b=average([{neck:.2,shoulder:1,head:2,torso:null},{neck:null,shoulder:3,head:4,torso:null}]);assert.equal(b.neck,.2);assert.equal(b.torso,null);assert.equal(assess({neck:.2,shoulder:2,head:3,torso:15},b).score,100);});
+test('no overlapping reference metrics yields no score, never NaN',()=>{assert.equal(assess({shoulder:null},{shoulder:0}).score,null);});
+test('angles account for actual image aspect ratio',()=>{const p=pose();p[11].y=.5;const m=measure(p,2);assert.ok(Math.abs(m.shoulder-Math.atan2(.1,.6)*180/Math.PI)<1e-9);});
+test('depth metric is invariant under uniform scale',()=>{const p=pose();const m=measure(p);const scaled=p.map(v=>({...v,x:v.x*.5,y:v.y*.5,z:v.z*.5}));assert.equal(measure(scaled).neck,m.neck);});
+test('average preserves all baseline components',()=>{assert.deepEqual(average([{neck:1,shoulder:2,torso:3,head:4},{neck:3,shoulder:4,torso:5,head:6}]),{neck:2,shoulder:3,torso:4,head:5});});
+test('alerts require five continuous seconds and rearm after recovery',()=>{const g=new PersistenceGate();assert.deepEqual(g.update(['neck'],0),[]);assert.deepEqual(g.update(['neck'],4999),[]);assert.deepEqual(g.update(['neck'],5000),['neck']);assert.deepEqual(g.update(['neck'],6000),[]);g.update([],6100);assert.deepEqual(g.update(['neck'],7000),[]);assert.deepEqual(g.update(['neck'],12000),['neck']);});
+test('severe changes reduce score and expose warning levels',()=>{const b=measure(pose());const r=assess({...b,shoulder:12,neck:b.neck+.4},b);assert.ok(r.score<60);assert.equal(r.metrics.find(m=>m.key==='shoulder').level,'bad');});
